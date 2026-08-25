@@ -1,26 +1,25 @@
+FROM python:3.11-slim AS builder
 
-FROM python:3.11-slim
- 
-RUN useradd --create-home app
-ENV HF_HOME=/home/app/.cache/huggingface
- 
-WORKDIR /app
- 
+WORKDIR /install
+
 COPY app/requirements.txt .
- 
-RUN pip install --no-cache-dir \
-      --index-url https://download.pytorch.org/whl/cpu \
-      --extra-index-url https://pypi.org/simple \
-      -r requirements.txt
- 
-COPY app/ .
- 
-RUN mkdir -p /home/app/.cache/huggingface \
-    && chown -R app:app /home/app/.cache /app
- 
-USER app
- 
+
+RUN pip install \
+    --no-cache-dir \
+    --prefix=/install/deps \
+    -r requirements.txt
+
+
+FROM python:3.11-slim AS runtime
+
+WORKDIR /app
+
+COPY --from=builder /install/deps /usr/local
+
+COPY app/main.py app/registry.json ./
+
+ENV PYTHONDONTWRITEBYTECODE=1
+
 EXPOSE 8000
- 
+
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
- 
