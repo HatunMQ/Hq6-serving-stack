@@ -21,20 +21,18 @@ from schemas import (
     Usage,
 )
 
-
 MODEL_ID = os.environ.get(
     "MODEL_ID",
     "Qwen/Qwen2.5-0.5B-Instruct"
 )
-
 
 app = FastAPI(
     title="serving-stack",
     version="wk2"
 )
 
-
-print(f"Loading {MODEL_ID} on CPU...")
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+print(f"Loading {MODEL_ID} on {DEVICE}...")
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 
@@ -43,7 +41,7 @@ model = AutoModelForCausalLM.from_pretrained(
     torch_dtype=torch.float32
 )
 
-model.to("cpu")
+model.to(DEVICE)
 model.eval()
 
 print("Model ready")
@@ -76,7 +74,6 @@ def _build_inputs(req: ChatCompletionRequest):
         add_generation_prompt=True,
         return_tensors="pt",
     )
-
     return input_ids, input_ids.shape[1]
 
 
@@ -84,6 +81,7 @@ def _generate(
     input_ids,
     req: ChatCompletionRequest
 ):
+    input_ids = input_ids.to(DEVICE)
     with torch.no_grad():
         out = model.generate(
             input_ids,
@@ -97,7 +95,6 @@ def _generate(
             ),
             pad_token_id=tokenizer.eos_token_id,
         )
-
     return out[0][input_ids.shape[1]:]
 
 
@@ -200,7 +197,6 @@ def _stream(
                 }
             ],
         }
-
         return (
             "data: "
             + json.dumps(payload)
