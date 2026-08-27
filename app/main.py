@@ -1,15 +1,12 @@
 from __future__ import annotations
-
 import json
 import os
 import time
 import uuid
-
 import torch
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from transformers import AutoModelForCausalLM, AutoTokenizer
-
 from schemas import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -20,31 +17,47 @@ from schemas import (
     ResponseMessage,
     Usage,
 )
-
 MODEL_ID = os.environ.get(
     "MODEL_ID",
     "Qwen/Qwen2.5-0.5B-Instruct"
 )
+API_KEY = os.environ.get("API_KEY", "")
+MAX_TOKENS = int(os.environ.get("MAX_TOKENS", "512"))
+
+if not API_KEY:
+    print("WARNING: API_KEY is not set. /v1 endpoints are running OPEN with no authentication.")
 
 app = FastAPI(
     title="serving-stack",
     version="wk2"
 )
-
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Loading {MODEL_ID} on {DEVICE}...")
-
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-
 model = AutoModelForCausalLM.from_pretrained(
     MODEL_ID,
     torch_dtype=torch.float32
 )
-
 model.to(DEVICE)
 model.eval()
-
 print("Model ready")
+
+
+def require_api_key(authorization: str = Header(default="")) -> None:
+    if not API_KEY:
+        return
+    expected = f"Bearer {API_KEY}"
+    if authorization != expected:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": {
+                    "message": "Invalid or missing API key",
+                    "type": "invalid_request_error",
+                    "code": "invalid_api_key"
+                }
+            },
+        )
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -53,9 +66,11 @@ def health() -> HealthResponse:
         status="ok",
         model=MODEL_ID
     )
-
-
-@app.get("/v1/models", response_model=ModelList)
+@app.get(
+    "/v1/models",
+    response_model=ModelList,
+    dependencies=[Depends(require_api_key)]
+)
 def list_models() -> ModelList:
     return ModelList(
         data=[
@@ -66,8 +81,6 @@ def list_models() -> ModelList:
             )
         ]
     )
-
-
 def _build_inputs(req: ChatCompletionRequest):
     input_ids = tokenizer.apply_chat_template(
         [m.model_dump() for m in req.messages],
@@ -75,8 +88,6 @@ def _build_inputs(req: ChatCompletionRequest):
         return_tensors="pt",
     )
     return input_ids, input_ids.shape[1]
-
-
 def _generate(
     input_ids,
     req: ChatCompletionRequest
@@ -96,11 +107,10 @@ def _generate(
             pad_token_id=tokenizer.eos_token_id,
         )
     return out[0][input_ids.shape[1]:]
-
-
 @app.post(
     "/v1/chat/completions",
-    response_model=None
+    response_model=None,
+    dependencies=[Depends(require_api_key)]
 )
 def chat_completions(
     req: ChatCompletionRequest
@@ -118,30 +128,25 @@ def chat_completions(
                 }
             },
         )
-
+    req.max_tokens = min(req.max_tokens, MAX_TOKENS)
     input_ids, prompt_tokens = _build_inputs(req)
-
     if req.stream:
         return _stream(
             input_ids,
             prompt_tokens,
             req
         )
-
     new_tokens = _generate(
         input_ids,
         req
     )
-
     completion_tokens = int(
         new_tokens.shape[0]
     )
-
     text = tokenizer.decode(
         new_tokens,
         skip_special_tokens=True
     )
-
     return ChatCompletionResponse(
         id="chatcmpl-" + uuid.uuid4().hex,
         created=int(time.time()),
@@ -168,8 +173,6 @@ def chat_completions(
             ),
         ),
     )
-
-
 def _stream(
     input_ids,
     prompt_tokens: int,
@@ -179,10 +182,8 @@ def _stream(
         input_ids,
         req
     )
-
     cid = "chatcmpl-" + uuid.uuid4().hex
     created = int(time.time())
-
     def chunk(delta: dict, finish=None):
         payload = {
             "id": cid,
@@ -202,7 +203,6 @@ def _stream(
             + json.dumps(payload)
             + "\n\n"
         )
-
     def events():
         yield chunk(
             {
@@ -210,25 +210,20 @@ def _stream(
                 "content": ""
             }
         )
-
         for tok in new_tokens:
             piece = tokenizer.decode(
                 [tok],
                 skip_special_tokens=True
             )
-
             if piece:
                 yield chunk(
                     {"content": piece}
                 )
-
         yield chunk(
             {},
             finish="stop"
         )
-
         yield "data: [DONE]\n\n"
-
     return StreamingResponse(
         events(),
         media_type="text/event-stream"
