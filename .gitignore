@@ -35,3 +35,5 @@ __pycache__/
 nohup.out
 .DS_Store
 .ipynb_checkpoints/
+.history/
+verify.py
