@@ -1,1 +1,0 @@
-{"cluster": "pod:aidc-t05", "namespace": "ghala", "pod": "serving", "image": "ghalaalnasser/aidc-serving:cpu-v2", "node": "aidc-t05", "chat_status": 200}
