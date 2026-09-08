@@ -1,0 +1,1 @@
+{"cluster": "pod:aidc-t05", "namespace": "hatun", "pod": "serving", "image": "hatun0/aidc-serving:cpu-v1", "node": "aidc-t05", "chat_status": 200}
