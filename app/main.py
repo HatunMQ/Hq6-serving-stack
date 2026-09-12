@@ -17,6 +17,9 @@ from schemas import (
     ResponseMessage,
     Usage,
 )
+from fastapi import Request
+from fastapi.responses import Response
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 MODEL_ID = os.environ.get(
     "MODEL_ID",
     "Qwen/Qwen2.5-0.5B-Instruct"
@@ -31,6 +34,35 @@ app = FastAPI(
     title="serving-stack",
     version="wk2"
 )
+
+aidc_requests_total = Counter(
+    "aidc_requests_total",
+    "Total HTTP requests handled by the app",
+    ["route", "method", "status"]
+)
+aidc_request_duration_seconds = Histogram(
+    "aidc_request_duration_seconds",
+    "Request duration in seconds",
+    ["route", "method"]
+)
+
+
+@app.middleware("http")
+async def metrics_middleware(request: Request, call_next):
+    route = request.url.path
+    start = time.time()
+    response = await call_next(request)
+    duration = time.time() - start
+    aidc_requests_total.labels(
+        route=route,
+        method=request.method,
+        status=str(response.status_code)
+    ).inc()
+    aidc_request_duration_seconds.labels(
+        route=route,
+        method=request.method
+    ).observe(duration)
+    return response
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Loading {MODEL_ID} on {DEVICE}...")
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
@@ -65,6 +97,14 @@ def health() -> HealthResponse:
     return HealthResponse(
         status="ok",
         model=MODEL_ID
+    )
+
+
+@app.get("/metrics")
+def metrics() -> Response:
+    return Response(
+        content=generate_latest(),
+        media_type=CONTENT_TYPE_LATEST
     )
 @app.get(
     "/v1/models",
